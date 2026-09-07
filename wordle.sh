@@ -42,6 +42,15 @@ shift $((OPTIND -1))
 # check if there is excatly 1 argument
 (($# == 1)) || foutmelding 2
 
+# vars
+declare -r contrast
+declare -r wordLength
+
+declare -A validLetters
+for char in {A..Z}; do
+    validLetters["${char}"]="${char}"
+done
+
 # make tmp file with words
 tmpfile=$(mktemp)
 grep -E "^[[:alpha:]]{${wordLength}}$" "${1}" | tr "[:lower:]" "[:upper:]" > "${tmpfile}"
@@ -58,29 +67,44 @@ badWord() {
 
 while [[ ${tries} -gt 0 && ${result} != ${guess} ]]; do
 
+    echo "Valid letters: ${validLetters[@]}"
     read guess
     guess="${guess^^}"
 
     if [[ "${#guess}" != "${#result}" ]]; then
         badWord ${guess} ${result}
     else
-        if [[ "$(grep -e "${guess}" "${tmpfile}")" == "" ]]; then
-            echo "${guess} is not a word"
-        else
-            feedback=""
-            for ((i=0; i<${#guess}; i++)); do
-                if [[ "${guess:${i}:1}" == "${result:${i}:1}" ]]; then
-                    feedback+="${contrast["RIGHT"]}"${guess:${i}:1}"${contrast["END"]}"
-                else
-                    if [[ ${result} =~ "${guess:${i}:1}" ]]; then
-                        feedback+="${contrast["PLACEMENT"]}"${guess:${i}:1}"${contrast["END"]}"
+
+        useOfLeters=""
+        for ((i=0; i<${#guess}; i++)); do
+            if [[ "${validLetters["${guess:${i}:1}"]}" == "" ]]; then
+                echo "Letter ${guess:${i}:1} is not in the word"
+            else
+                useOfLetters+="${validLetters["${guess:${i}:1}"]}"
+            fi
+        done
+
+        if [[ "${#useOfLetters}" == "${#guess}" ]]; then
+            if [[ "$(grep -e "${guess}" "${tmpfile}")" == "" ]]; then
+                echo "${guess} is not a word"
+            else
+                feedback=""
+                for ((i=0; i<${#guess}; i++)); do
+                    if [[ "${guess:${i}:1}" == "${result:${i}:1}" ]]; then
+                        feedback+="${contrast["RIGHT"]}"${guess:${i}:1}"${contrast["END"]}"
                     else
-                        feedback+="${contrast["WRONG"]}"${guess:${i}:1}"${contrast["END"]}"
+                        if [[ ${result} =~ "${guess:${i}:1}" ]]; then
+                            feedback+="${contrast["PLACEMENT"]}"${guess:${i}:1}"${contrast["END"]}"
+                        else
+                            feedback+="${contrast["WRONG"]}"${guess:${i}:1}"${contrast["END"]}"
+                            # delete it out of valid chars
+                            unset 'validLetters["${guess:${i}:1}"]'
+                            fi
                     fi
-                fi
-            done
-            echo -e "${feedback}"
-            tries=$((${tries} - 1))
+                done
+                echo -e "${feedback}"
+                tries=$((${tries} - 1))
+            fi
         fi
     fi
 done
