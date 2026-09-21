@@ -1,122 +1,152 @@
 #!/bin/bash
 
-# command name
+export LC_ALL=C
+
 commando="$(basename "$0")"
 declare -r commando
 
-#constants and standard value
 declare -i wordLength=5
 declare -i tries=6
 
 declare -A contrast
-contrast["WRONG"]="\e[31m"
-contrast["RIGHT"]="\e[32m"
-contrast["PLACEMENT"]="\e[33m"
-contrast["END"]="\e[0m"
+contrast[RIGHT]=$'\e[32m'
+contrast[PLACEMENT]=$'\e[33m'
+contrast[WRONG]=$'\e[31m'
+contrast[END]=$'\e[0m'
 
-# hulpfunctie: geef syntaxis weer en stop script met gegeven exit status
 foutmelding() {
-    echo "Syntax: ${commando} [-l <int between 3,10>] [-c] FILE" 1>&2 && exit "$1"
+    echo "Syntax: ${commando} [-l <int between 3,10>] [-c] FILE" 1>&2
+    exit "$1"
 }
 
-# verwerk opties
 while getopts ":l:c" opt; do
-
     case "${opt}" in
-
         l)
-            if (( ${OPTARG} < 2 || 10 < ${OPTARG} )); then
+            if ! [[ ${OPTARG} =~ ^[0-9]{1,2}$ ]] || (( 10#${OPTARG} < 3 || 10#${OPTARG} > 10 )); then
                 foutmelding 1
             fi
-
-            wordLength=${OPTARG}
+            wordLength=$(( 10#${OPTARG} ))
             ;;
-
-        \?) foutmelding 1
+        c)
+            contrast[RIGHT]=$'\e[1;38;5;208m'
+            contrast[PLACEMENT]=$'\e[1;38;5;39m'
+            contrast[WRONG]=$'\e[90m'
             ;;
-
+        :|\?)
+            foutmelding 1
+            ;;
     esac
 done
-shift $((OPTIND -1))
+shift $((OPTIND - 1))
 
-# check if there is excatly 1 argument
 (($# == 1)) || foutmelding 2
 
-# vars
+wordFile="$1"
+if [[ ! -f ${wordFile} || ! -r ${wordFile} ]]; then
+    echo "${commando}: cannot read '${wordFile}'" 1>&2
+    exit 3
+fi
+
 declare -r contrast
 declare -r wordLength
 
-declare -A validLetters
-for char in {A..Z}; do
-    validLetters["${char}"]="${char}"
-done
+tmpfile=$(mktemp) || exit 4
+trap 'rm -f "${tmpfile}"' EXIT
 
-# make tmp file with words
-tmpfile=$(mktemp)
-grep -E "^[[:alpha:]]{${wordLength}}$" "${1}" | tr "[:lower:]" "[:upper:]" > "${tmpfile}"
+tr -d '\r' < "${wordFile}" \
+    | grep -E "^[A-Za-z]{${wordLength}}$" \
+    | tr '[:lower:]' '[:upper:]' \
+    | sort -u > "${tmpfile}"
 
-# pick a random word
-result=$(shuf -n 1 ${tmpfile})
+if [[ ! -s ${tmpfile} ]]; then
+    echo "${commando}: no ${wordLength}-letter words found in '${wordFile}'" 1>&2
+    exit 5
+fi
+
+result=$(shuf -n 1 "${tmpfile}")
 declare -r result
+
+validLetters="ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 badWord() {
     echo "${1} is invalid!"
-    echo "Word has to be ${#2} long"
+    echo "Word has to be ${wordLength} letters long"
     echo "Only alphabetic letters!"
 }
 
-while [[ ${tries} -gt 0 && ${result} != ${guess} ]]; do
+score() {
+    local g="$1" r="$2" i c
+    local -a status=()
+    local -A remaining=()
 
-    echo "Valid letters: ${validLetters[@]}"
-    read guess
+    for ((i = 0; i < ${#g}; i++)); do
+        if [[ ${g:i:1} == "${r:i:1}" ]]; then
+            status[i]=RIGHT
+        else
+            status[i]=WRONG
+            c="${r:i:1}"
+            remaining[$c]=$(( ${remaining[$c]:-0} + 1 ))
+        fi
+    done
+
+    for ((i = 0; i < ${#g}; i++)); do
+        [[ ${status[i]} == RIGHT ]] && continue
+        c="${g:i:1}"
+        if (( ${remaining[$c]:-0} > 0 )); then
+            status[i]=PLACEMENT
+            remaining[$c]=$(( remaining[$c] - 1 ))
+        fi
+    done
+
+    feedback=""
+    for ((i = 0; i < ${#g}; i++)); do
+        feedback+="${contrast[${status[i]}]}${g:i:1}${contrast[END]}"
+    done
+}
+
+guess=""
+while (( tries > 0 )) && [[ ${result} != "${guess}" ]]; do
+
+    echo "Valid letters: ${validLetters}"
+    echo "Tries left: ${tries}"
+    read -r guess || { echo; guess=""; break; }
     guess="${guess^^}"
 
-    if [[ "${#guess}" != "${#result}" ]]; then
-        badWord ${guess} ${result}
-    else
-
-        useOfLeters=""
-        for ((i=0; i<${#guess}; i++)); do
-            if [[ "${validLetters["${guess:${i}:1}"]}" == "" ]]; then
-                echo "Letter ${guess:${i}:1} is not in the word"
-            else
-                useOfLetters+="${validLetters["${guess:${i}:1}"]}"
-            fi
-        done
-
-        if [[ "${#useOfLetters}" == "${#guess}" ]]; then
-            if [[ "$(grep -e "${guess}" "${tmpfile}")" == "" ]]; then
-                echo "${guess} is not a word"
-            else
-                feedback=""
-                for ((i=0; i<${#guess}; i++)); do
-                    if [[ "${guess:${i}:1}" == "${result:${i}:1}" ]]; then
-                        feedback+="${contrast["RIGHT"]}"${guess:${i}:1}"${contrast["END"]}"
-                    else
-                        if [[ ${result} =~ "${guess:${i}:1}" ]]; then
-                            feedback+="${contrast["PLACEMENT"]}"${guess:${i}:1}"${contrast["END"]}"
-                        else
-                            feedback+="${contrast["WRONG"]}"${guess:${i}:1}"${contrast["END"]}"
-                            # delete it out of valid chars
-                            unset 'validLetters["${guess:${i}:1}"]'
-                            fi
-                    fi
-                done
-                echo -e "${feedback}"
-                tries=$((${tries} - 1))
-            fi
-        fi
+    if [[ ${#guess} -ne ${wordLength} || ! ${guess} =~ ^[A-Z]+$ ]]; then
+        badWord "${guess}"
+        continue
     fi
+
+    valid=true
+    for ((i = 0; i < ${#guess}; i++)); do
+        letter="${guess:i:1}"
+        if [[ ${validLetters} != *"${letter}"* ]]; then
+            echo "Letter ${letter} is not in the word"
+            valid=false
+        fi
+    done
+    ${valid} || continue
+
+    if ! grep -qxF -- "${guess}" "${tmpfile}"; then
+        echo "${guess} is not a word"
+        continue
+    fi
+
+    score "${guess}" "${result}"
+    printf '%s\n' "${feedback}"
+    tries=$(( tries - 1 ))
+
+    for ((i = 0; i < ${#guess}; i++)); do
+        letter="${guess:i:1}"
+        if [[ ${result} != *"${letter}"* ]]; then
+            validLetters="${validLetters//${letter}/}"
+        fi
+    done
 done
 
-
-# end of game message
-if [[ ${result} == ${guess} ]]; then
+if [[ ${result} == "${guess}" ]]; then
     echo "You won!"
 else
     echo "You lost!"
 fi
 echo "The word was: ${result}"
-
-# clean up
-rm -f "${tmpfile}"
